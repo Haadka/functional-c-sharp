@@ -1,69 +1,114 @@
-#functional-c-sharp
-## Using Functional Paradigm in C#, or just foreach?
+# C# : Functional Paradigm vs One Loop.
 
-The goal here is to show how functional programming paradigm in modern C# can outperforme a coding style that uses single-iteration (via foreach/for) to get a better optimization.
+Does a modern C# functional paradigm perform as fast as code that has a single-iteration (via foreach/for)?
 
-To show that we conduct the following experiment: I will process an input of `IEnumerable` items of objects in two different ways and using Visual studio profiler.
+To answer that, I conducted the following experiment: an input of 70,000 IEnumerable objects will be processed in 3 different ways (implementations):
 
-I choose a complicated input but a simple processing. This fits the nature of many Line of Business applications. So, the processing is: 
+- With Single for-each loop
+- With C# Linq to objects
+- With PLINQ and concurrent collections (using tasks/ threads underneath)
 
-- Calculate the sum of a property in each time
-- Store the a copy of the list in a new list
-- Fetch the first item in the list
+To compare the performance of these, I used Visual studio profiler. The processing steps that each approach has to implement are as follows:
 
-One way is to write a single for-each:
+- Calculate the sum of a property in each list item
+- Transform (map) all items from one type to another
+- Compute Fibonacci of 100 for each item
+- Fetch the last item in the input list
+- Sort the input list based on one property
+
+To give the experiment a context, the program input is regarded as a list of job candidates. The 3 approaches are seen as three HR systems. Each system has to give the same output which is a list of employee (having been processed)
+
+## Approach #1 
+## One-Loop System:
 ```
-            var newRandomData = new List<Poco>();
-            long sum = 0; 
-            Poco firstItem = null;
-
-            foreach (var item in randomData)
+            long sum = 0;
+            var employeeList = new SortedList<int, Employee>();
+            JobCandidate lastItem = null;
+            foreach (var item in candidates)
             {
-                sum = item.Value;
-                newRandomData.Add(item);
-                if(firstItem == null)
-                {
-                    firstItem = item;
-                }
+                sum += item.Value;
+                var newItem = mapper.Map<Employee>(item);
+                newItem.ComputeFibonacci();
+                employeeList.Add(item.Index, newItem);
+                lastItem = item;
             };
+            return (sum, lastItem, employeeList.Values);
 ```
 
-The argument here is that we have only a single iteration over the IEnumerable set.
+The argument for one loop is that data will be iterated once only. To avoid sorting in the end, a `SortedList` is used to perform online sorting.
 
-The other way would be
+The other way would be using Linq
 
-```
-            var randomDataList = randomData.ToList();
-            var newRandomData = randomDataList.Select(r => r).ToList();
-            var sum = randomDataList.Select(r => r.Value).Sum();
-            var firstItem = randomDataList.FirstOrDefault();
-```
-
-That is 50% less code and it does the same thing.
-
-It is a simple use case but imagine putting such limitation (single foreach loop) on every list in your application. It will give the program a low-level-code feel. It will lead developers to sometime couple pieces of logic that do not belong together. 
-
-But is is worth it?
-
-Using the free Visual Studio Profiler, we can compare the two approaches with sizable data.  
-
-Here is the input to our program:
+## Approach #2
+## Linq-Co:
 
 ```
-            var randomData = Enumerable.Range(0, inputSize)
-                .Select(i => new Poco(Guid.NewGuid(), ComputeFibonacci(1000  i)))
-                .OrderBy(r => r.Id).ThenByDescending(r => r.Value).AsEnumerable();
+            var candidateList = input.ToList();
+            var sum = candidateList.Select(r => r.Value).Sum();
+            var lastItem = candidateList.LastOrDefault();
+            var employeeList = candidateList.Select(item => {
+                var newItem = mapper.Map<Employee>(item);
+                newItem.ComputeFibonacci();
+                return newItem;
+            }).ToList();
+            employeeList.Sort();
+            return (sum, lastItem, employeeList);
 ```
 
-The reason for this value is to test if a method handles lazy loading properly: without multiple executions.
+The rationale behind this approach is that code readability is important and each statement should have clear intent. This style is therefore more maintainable. The `ToList` ensures that an enumerations is not executed many times. And since the collection fits into memory, it is hard to reason how a for-loop of a high-level language affects CPU/memory interaction.
 
+## Approach #3
+## ParallelSystems:
 
+Since we have some calculations and many data points, using parallel task library could possibly speed the overall process.
 
-## Experiment Results:
-|
+```
+            var candidateList = input.ToList();
+            var employeeSet = new ConcurrentBag<Employee>();
 
+            var sum = candidateList.Select(r => r.Value).Sum();
+            var lastItem = candidateList.LastOrDefault();
 
-To take this further, since our code is made of non I/O bound operations, we can use PLINQ to speed things up.
+            candidateList.AsParallel().ForAll(item => {
+                var newItem = mapper.Map<Employee>(item);
+                newItem.ComputeFibonacci();
+                employeeSet.Add(newItem);
+            });
 
+            var employeeList = employeeSet.ToList();
+            employeeList.Sort();
+            return (sum, lastItem, employeeList);
+```
 
-# Profiler Screen analysis
+# Results 
+
+Using the free Visual Studio Profiler, we can compare the three approaches and also a fake Implementation which does nothing but iteration over the input data. This can be our baseline.  
+
+For each approach, I have executed the profiler three time and took the average. The memory usage (heap) has been recorded as well:
+
+| Approach | Average Total Time (s) | CPU time (ms) for the implementation  | Memory (heap)|
+| ------------- | ------------- |----------|--------------|
+| Fake HR| 8.98 | 5431 | 285 KB|
+| One Loop | 10.06 | 6740 | 217 MB |
+| Linq | 9.84 | 6685 | 216 MB 
+| Parallel | 10.50 | 6725 | 217 MB
+
+# Second Experiment Results:
+
+The fist experiment shows that Parallel did not perform well. This is due to the processing logic being mostly IO bound operations. To test the case for CPU bound operation, I have run the experiment again but with a higher number in the Fibonacci calculations (1,000,000 instead of 100)
+
+The results are as follows:
+
+| Approach | Average Total Time (s) |
+| ------------- | ------------- |
+| Fake HR| 8.56 |
+| One Loop | 85.49 |
+| Linq | 54.02 |
+| Parallel | 26.33 |
+
+# Summary
+
+As you can see above, the result speak for itself. There is no single advantage in the one-loop style. It reduces the readability without any added performance benefits in IO bound operations. In CPU bound operations, one-loop style performs very badly.
+
+This repo contains all the code and results for the experiment. Please feel free to contribute and share your take on this issue.
+
